@@ -1,0 +1,150 @@
+import import_ipynb
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from preprocessor import MP3Preprocessor, load_encodec_model  
+from transformer import Transformer
+import glob
+from encodec import EncodecModel
+from encodec.utils import convert_audio
+import librosa
+import soundfile as sf
+import numpy as np
+import torch.nn.functional as F  # Import for padding
+from flask import Flask, render_template, request, send_from_directory
+import os
+
+# Hyperparameters
+num_layers = 6  # Number of encoder/decoder layers
+d_model = 256  # Dimension of the model
+num_heads = 8  # Number of attention heads
+d_feedforward = 1024  # Dimension of the feedforward network
+input_vocab_size = 2048  # Encodec vocabulary size
+target_vocab_size = 2048  # Encodec vocabulary size
+max_seq_length = 1126  # Maximum sequence length from MP3Preprocessor
+dropout = 0.1  # Dropout rate
+epochs = 10  # Number of training epochs
+batch_size = 1  # Batch size
+learning_rate = 0.0001  # Learning rate
+
+# Data Loading
+mp3_dataset = glob.glob(r'C:\Users\PC\FinalProjectAI\path\*.mp3') 
+encodec_model = load_encodec_model()
+preprocessor = MP3Preprocessor(mp3_dataset, encodec_model)
+
+input_seq, target_seq = preprocessor.preprocess_pair(mp3_dataset[0], mp3_dataset[1])
+
+# Model Initialization
+model = Transformer(
+    num_layers,
+    d_model,
+    num_heads,
+    d_feedforward,
+    input_vocab_size,
+    target_vocab_size,
+    max_seq_length,
+    dropout,
+)
+
+# Loss and Optimizer
+criterion = nn.CrossEntropyLoss()  # Choose an appropriate loss function
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+
+class TransitionGenerator:
+    def __init__(self, model, encodec_model, sample_rate=24000):
+        self.model = model
+        self.encodec_model = encodec_model
+        self.sample_rate = sample_rate
+
+    def generate_transition(self, input_seq, target_seq, transition_duration=15.0):
+        self.model.eval()
+        with torch.no_grad():
+            # Generate output tokens (you might need to modify this depending on your model's output)
+            output = self.model(input_seq, target_seq[:, :-1]) 
+            output = torch.argmax(output, dim=-1)  # Get predicted tokens
+
+            # Convert tokens back to audio using Encodec
+            transition_audio = self.decode_tokens_to_audio(output, transition_duration)  
+
+        return transition_audio
+
+    def decode_tokens_to_audio(self, tokens, duration):
+        tokens = tokens.permute(1, 0).unsqueeze(0)  # Adjust shape for Encodec
+        with torch.no_grad():
+            decoded_frames = self.encodec_model.decode(tokens)
+        decoded_audio = torch.cat([frame[0] for frame in decoded_frames], dim=-1)
+        decoded_audio = convert_audio(decoded_audio, 24000, self.sample_rate, 1) 
+
+        # Ensure the output audio has the desired duration
+        target_length = int(duration * self.sample_rate)
+        if len(decoded_audio[0]) < target_length:
+            decoded_audio = F.pad(decoded_audio, (0, target_length - len(decoded_audio[0])))
+        elif len(decoded_audio[0]) > target_length:
+            decoded_audio = decoded_audio[:, :target_length]
+
+        return decoded_audio[0].numpy()  
+
+    def merge_audio(self, song_a_path, song_b_path, transition_audio):
+        song_a_audio, _ = librosa.load(song_a_path, sr=self.sample_rate)
+        song_b_audio, _ = librosa.load(song_b_path, sr=self.sample_rate)
+
+        merged_audio = np.concatenate((song_a_audio, transition_audio, song_b_audio))
+        sf.write("merged_output.wav", merged_audio, self.sample_rate)
+        # Convert to MP3 using librosa
+        librosa.output.write_mp3("merged_output.mp3", merged_audio, self.sample_rate)
+
+
+# Training Loop
+for epoch in range(epochs):
+    # Forward Pass
+    output = model(input_seq, target_seq[:, :-1])
+
+    # Calculate Loss
+    # Reshape output and target for loss calculation
+    output = output.reshape(-1, output.shape[-1])
+    target = target_seq[:, 1:].reshape(-1)
+    loss = criterion(output, target)
+
+    # Backpropagation
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    # Print Progress
+    print(f"Epoch: {epoch+1}/{epochs}, Loss: {loss.item():.4f}")
+
+
+# Flask App
+app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file1 = request.files['file1']
+        file2 = request.files['file2']
+        if file1 and file2:
+            filepath1 = os.path.join(app.config['UPLOAD_FOLDER'], file1.filename)
+            filepath2 = os.path.join(app.config['UPLOAD_FOLDER'], file2.filename)
+            file1.save(filepath1)
+            file2.save(filepath2)
+
+            # Generate Transition
+            encodec_model = load_encodec_model()  # Load Encodec model here
+            preprocessor = MP3Preprocessor([filepath1, filepath2], encodec_model)
+            input_seq, target_seq = preprocessor.preprocess_pair(filepath1, filepath2)
+
+            transition_generator = TransitionGenerator(model, encodec_model)
+            transition_audio = transition_generator.generate_transition(input_seq, target_seq)
+            transition_generator.merge_audio(filepath1, filepath2, transition_audio)
+
+            return send_from_directory('', 'merged_output.mp3', as_attachment=True)
+
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
