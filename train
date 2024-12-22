@@ -15,43 +15,6 @@ import torch.nn.functional as F  # Import for padding
 from flask import Flask, render_template, request, send_from_directory
 import os
 
-# Hyperparameters
-num_layers = 6  # Number of encoder/decoder layers
-d_model = 256  # Dimension of the model
-num_heads = 8  # Number of attention heads
-d_feedforward = 1024  # Dimension of the feedforward network
-input_vocab_size = 2048  # Encodec vocabulary size
-target_vocab_size = 2048  # Encodec vocabulary size
-max_seq_length = 1126  # Maximum sequence length from MP3Preprocessor
-dropout = 0.1  # Dropout rate
-epochs = 10  # Number of training epochs
-batch_size = 1  # Batch size
-learning_rate = 0.0001  # Learning rate
-
-# Data Loading
-mp3_dataset = glob.glob(r'C:\Users\PC\FinalProjectAI\path\*.mp3') 
-encodec_model = load_encodec_model()
-preprocessor = MP3Preprocessor(mp3_dataset, encodec_model)
-
-input_seq, target_seq = preprocessor.preprocess_pair(mp3_dataset[0], mp3_dataset[1])
-
-# Model Initialization
-model = Transformer(
-    num_layers,
-    d_model,
-    num_heads,
-    d_feedforward,
-    input_vocab_size,
-    target_vocab_size,
-    max_seq_length,
-    dropout,
-)
-
-# Loss and Optimizer
-criterion = nn.CrossEntropyLoss()  # Choose an appropriate loss function
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-
 class TransitionGenerator:
     def __init__(self, model, encodec_model, sample_rate=24000):
         self.model = model
@@ -95,6 +58,42 @@ class TransitionGenerator:
         # Convert to MP3 using librosa
         librosa.output.write_mp3("merged_output.mp3", merged_audio, self.sample_rate)
 
+
+# Hyperparameters
+num_layers = 6  # Number of encoder/decoder layers
+d_model = 256  # Dimension of the model
+num_heads = 8  # Number of attention heads
+d_feedforward = 1024  # Dimension of the feedforward network
+input_vocab_size = 2048  # Encodec vocabulary size
+target_vocab_size = 2048  # Encodec vocabulary size
+max_seq_length = 1126  # Maximum sequence length from MP3Preprocessor
+dropout = 0.1  # Dropout rate
+epochs = 10  # Number of training epochs
+batch_size = 1  # Batch size
+learning_rate = 0.0001  # Learning rate
+
+# Data Loading
+mp3_dataset = glob.glob(r'C:\Users\PC\FinalProjectAI\path\*.mp3') 
+encodec_model = load_encodec_model()
+preprocessor = MP3Preprocessor(mp3_dataset, encodec_model)
+
+input_seq, target_seq = preprocessor.preprocess_pair(mp3_dataset[0], mp3_dataset[1])
+
+# Model Initialization
+model = Transformer(
+    num_layers,
+    d_model,
+    num_heads,
+    d_feedforward,
+    input_vocab_size,
+    target_vocab_size,
+    max_seq_length,
+    dropout,
+)
+
+# Loss and Optimizer
+criterion = nn.CrossEntropyLoss()  # Choose an appropriate loss function
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 # Training Loop
 for epoch in range(epochs):
